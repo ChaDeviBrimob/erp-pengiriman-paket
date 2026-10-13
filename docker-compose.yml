@@ -1,0 +1,102 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: erp-app
+    ports:
+      - "8080:80"
+    volumes:
+      - ./storage:/var/www/html/storage
+      - ./public/uploads:/var/www/html/public/uploads
+      - ./.env:/var/www/html/.env
+    depends_on:
+      - mysql
+      - redis
+    networks:
+      - erp-network
+    environment:
+      - APP_ENV=production
+      - APP_DEBUG=false
+    restart: unless-stopped
+
+  mysql:
+    image: mysql:8.0
+    container_name: erp-mysql
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
+    environment:
+      - MYSQL_ROOT_PASSWORD=root_password
+      - MYSQL_DATABASE=erp_db
+      - MYSQL_USER=erp_user
+      - MYSQL_PASSWORD=erp_password
+    networks:
+      - erp-network
+    restart: unless-stopped
+    command: --default-authentication-plugin=mysql_native_password
+
+  redis:
+    image: redis:7-alpine
+    container_name: erp-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - erp-network
+    restart: unless-stopped
+
+  nginx-proxy:
+    image: nginx:alpine
+    container_name: erp-proxy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./docker/nginx-proxy.conf:/etc/nginx/nginx.conf
+      - ./docker/ssl:/etc/nginx/ssl
+    depends_on:
+      - app
+    networks:
+      - erp-network
+    restart: unless-stopped
+
+  backup:
+    image: alpine:latest
+    container_name: erp-backup
+    volumes:
+      - mysql_data:/backup/mysql
+      - ./storage:/backup/storage
+      - ./docker/backup.sh:/backup.sh
+    command: |
+      sh -c "
+        apk add --no-cache mysql-client tar gzip dcron &&
+        echo '0 2 * * * /backup.sh' | crontab - &&
+        crond -f
+      "
+    networks:
+      - erp-network
+    restart: unless-stopped
+
+volumes:
+  mysql_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /volume1/docker/erp-mysql
+  redis_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /volume1/docker/erp-redis
+
+networks:
+  erp-network:
+    driver: bridge
